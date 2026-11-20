@@ -1,26 +1,18 @@
 
 import os
 import hmac
+from typing import Dict, List
+
 from dotenv import load_dotenv
 
-from fastapi import (
-    FastAPI,
-    Depends,
-    HTTPException,
-)
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import (
-    HTTPBearer,
-    HTTPAuthorizationCredentials,
-)
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+from langchain_core.messages import HumanMessage, AIMessage
 
 from src.rag_pipeline import rag_chain
-from src.api_schemas import (
-    ChatRequest,
-    ChatResponse,
-    HealthResponse,
-)
-from src.session_manager import session_manager
+from src.api_schemas import ChatRequest, ChatResponse, HealthResponse
 
 
 # =========================================================
@@ -29,10 +21,35 @@ from src.session_manager import session_manager
 
 load_dotenv(override=True)
 
-RAG_API_KEY = os.getenv("RAG_API_KEY")
 
 # =========================================================
-# 2. SWAGGER BEARER AUTHENTICATION
+# 2. FASTAPI APPLICATION
+# =========================================================
+
+app = FastAPI(
+    title="Advanced RAG API",
+    description="Conversational Advanced RAG Chatbot using LangChain and FastAPI",
+    version="1.0.0"
+)
+
+
+# =========================================================
+# 3. CORS CONFIGURATION
+# =========================================================
+
+origins = os.getenv("CORS_ORIGINS", "*").split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[origin.strip() for origin in origins],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# =========================================================
+# 4. SWAGGER BEARER AUTHENTICATION
 # =========================================================
 
 security = HTTPBearer(auto_error=False)
@@ -41,6 +58,7 @@ security = HTTPBearer(auto_error=False)
 def verify_api_key(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
+
     expected_key = os.getenv("RAG_API_KEY")
 
     if not expected_key:
@@ -63,37 +81,19 @@ def verify_api_key(
 
 
 # =========================================================
-# 3. FASTAPI APPLICATION
+# 5. CONVERSATION HISTORY STORAGE
 # =========================================================
 
-app = FastAPI(
-    title="Advanced RAG API",
-    description="REST API for the existing LangChain Advanced RAG pipeline.",
-    version="1.0.0"
-)
+store: Dict[str, List] = {}
 
 
 # =========================================================
-# 4. CORS CONFIGURATION
-# =========================================================
-
-origins = os.getenv("CORS_ORIGINS", "*").split(",")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[origin.strip() for origin in origins],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# =========================================================
-# 5. ROOT ENDPOINT
+# 6. ROOT ROUTE
 # =========================================================
 
 @app.get("/")
-def root():
+def home():
+
     return {
         "service": "Advanced RAG API",
         "status": "running",
@@ -102,11 +102,12 @@ def root():
 
 
 # =========================================================
-# 6. HEALTH CHECK
+# 7. HEALTH CHECK
 # =========================================================
 
 @app.get("/health", response_model=HealthResponse)
 def health():
+
     return {
         "status": "healthy",
         "service": "advanced-rag-api",
@@ -115,7 +116,7 @@ def health():
 
 
 # =========================================================
-# 7. CHAT ENDPOINT
+# 8. CHAT API
 # =========================================================
 
 @app.post(
@@ -126,18 +127,28 @@ def health():
 def chat(request: ChatRequest):
 
     try:
-        # Retrieve previous conversation history
-        chat_history = session_manager.get_history(
-            request.session_id
-        )
+
+        session_id = request.session_id
+        question = request.question.strip()
+
+        if not question:
+            raise HTTPException(
+                status_code=400,
+                detail="Question cannot be empty"
+            )
+
+        # Create session if it does not exist
+        if session_id not in store:
+            store[session_id] = []
+
+        # Retrieve conversation history
+        chat_history = store[session_id]
 
         # Execute Advanced RAG pipeline
-        result = rag_chain.invoke(
-            {
-                "input": request.question,
-                "chat_history": chat_history
-            }
-        )
+        result = rag_chain.invoke({
+            "input": question,
+            "chat_history": chat_history[-10:]
+        })
 
         # Extract answer
         if isinstance(result, dict):
@@ -150,30 +161,36 @@ def chat(request: ChatRequest):
         else:
             answer = str(result)
 
-        # Save conversation history
-        session_manager.append_turn(
-            request.session_id,
-            request.question,
-            answer
+        # Store user message
+        chat_history.append(
+            HumanMessage(content=question)
+        )
+
+        # Store AI response
+        chat_history.append(
+            AIMessage(content=answer)
         )
 
         return ChatResponse(
             answer=answer,
-            session_id=request.session_id
+            session_id=session_id
         )
 
     except HTTPException:
         raise
 
     except Exception as e:
+
+        print("RAG Error:", str(e))
+
         raise HTTPException(
             status_code=500,
-            detail=f"RAG processing failed: {str(e)}"
+            detail="Error processing your question"
         )
 
 
 # =========================================================
-# 8. CLEAR CONVERSATION SESSION
+# 9. CLEAR SESSION HISTORY
 # =========================================================
 
 @app.delete(
@@ -182,9 +199,9 @@ def chat(request: ChatRequest):
 )
 def clear_session(session_id: str):
 
-    session_manager.clear(session_id)
+    store.pop(session_id, None)
 
     return {
-        "message": "Conversation history cleared successfully",
+        "message": "Chat history cleared successfully",
         "session_id": session_id
     }
