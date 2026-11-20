@@ -1,0 +1,20 @@
+# Web applications
+fastapi
+uvicorn[standard]
+streamlit
+
+# LangChain and integrations
+langchain
+langchain-core
+langchain-community
+langchain-text-splitters
+langchain-groq
+langchain-huggingface
+
+# Vector store, embeddings, PDF ingestion
+faiss-cpu
+sentence-transformers
+pypdf
+
+# Configuration
+python-dotenv
