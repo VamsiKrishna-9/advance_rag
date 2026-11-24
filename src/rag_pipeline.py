@@ -1,7 +1,9 @@
-from src.config import retriever
+
 from langchain_core.runnables import RunnableLambda
 
-from src.chains import(
+from src.supabase_retriever import retrieve_from_supabase
+
+from src.chains import (
     contextualize_chain,
     document_answer_chain,
     intent_chain,
@@ -13,88 +15,83 @@ from src.chains import(
 def retrieve_documents(inputs):
 
     # 1. Rewrite the question
-
-    standalone_question=contextualize_chain.invoke(
+    standalone_question = contextualize_chain.invoke(
         {
-            "input":inputs["input"],
-            "chat_history":inputs["chat_history"]
+            "input": inputs["input"],
+            "chat_history": inputs["chat_history"]
         }
     )
 
-    print("\n Rewritten Question:",standalone_question)
+    print("\nRewritten Question:", standalone_question)
 
-    # Retrieve relevant documents
+    # 2. Retrieve relevant chunks from Supabase
+    documents = retrieve_from_supabase(
+        standalone_question,
+        role=inputs.get("role"),
+        k=5
+    )
 
-    documents=retriever.invoke(standalone_question)
-
-    # Combine document chunks
-
-    context="\n\n".join(
+    # 3. Combine document chunks
+    context = "\n\n".join(
         [doc.page_content for doc in documents]
     )
 
-    # 4. Handle Emplty retrieval
+    # 4. Handle empty retrieval
     if not context.strip():
-        return "I dont know based on the provided document."
+        return "I don't know based on the provided documents."
 
-    # 5. Generate The document based Answer
-
-    answer=document_answer_chain.invoke(
+    # 5. Generate document-based answer
+    answer = document_answer_chain.invoke(
         {
-        "input":standalone_question,
-        "context":context
+            "input": standalone_question,
+            "context": context
         }
     )
 
     return answer
 
 
-
 def route_request(inputs):
 
-    # 1. Get the user question
+    question = inputs["input"]
+    history = inputs["chat_history"]
 
-    question=inputs["input"]
-    history=inputs["chat_history"]
-
-    # 2. Identifying the Intent
-
-    intent=intent_chain.invoke(
+    # Identify intent
+    intent = intent_chain.invoke(
         {
-            "input":question,
-            "chat_history":history
+            "input": question,
+            "chat_history": history
         }
     ).strip().upper()
 
-    print("\nDetected Intent:",intent)
+    print("\nDetected Intent:", intent)
 
-    # Document Route
-
-    if intent=="DOCUMENT":
+    if intent == "DOCUMENT":
         return retrieve_documents(inputs)
 
-    elif intent=="HISTORY":
+    elif intent == "HISTORY":
         return history_answer_chain.invoke(
             {
-                "input":question,
-                "chat_history":history
+                "input": question,
+                "chat_history": history
             }
         )
-    
-    elif intent=="GENERAL":
+
+    elif intent == "GENERAL":
         return general_chain.invoke(
             {
-                "input":question,
-                "chat_history":history
+                "input": question,
+                "chat_history": history
             }
         )
-    
+
     else:
         return general_chain.invoke(
             {
-                "input":question,
-                "chat_history":history
+                "input": question,
+                "chat_history": history
             }
         )
 
-rag_chain=RunnableLambda(route_request)
+
+rag_chain = RunnableLambda(route_request)
